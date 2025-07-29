@@ -1,13 +1,20 @@
+use std::env;
 use std::time::{Duration, Instant};
-
-const MEMORY_SIZE_MB: usize = 128;
-const HAMMER_ROUNDS: usize = 1_000_000;
 
 fn main() {
     println!("Rusty-Checker: RowHammer vulnerability checker");
-    println!("Allocation {} MB of memory", MEMORY_SIZE_MB);
+    let args: Vec<String> = env::args().collect();
+    let default_mb = 128;
 
-    let size = MEMORY_SIZE_MB * 1024 * 1024;
+    let mb: usize = if args.len() > 1 {
+        args[1].parse().unwrap_or(default_mb)
+    } else {
+        default_mb
+    };
+
+    let size = mb * 1024 * 1024;
+    println!("Allocation {} MB of memory", mb);
+
     let mut memory = vec![0u8; size];
 
     let row_size = 8192;
@@ -22,19 +29,31 @@ fn main() {
     let mut dummy = 0u8;
 
     let start = Instant::now();
-
-    for _ in 0..HAMMER_ROUNDS {
-        dummy ^= memory[row1_idx];
-        dummy ^= memory[row2_idx];
+    for _ in 0..100_000 {
+        memory[row1_idx] = 0x00;
+        memory[row2_idx] = 0x00;
+        memory[row1_idx] = 0xFF;
+        memory[row2_idx] = 0xFF;
     }
 
     let duration = start.elapsed();
     println!("Hammering took: {:?}", duration);
 
-    if memory[row1_idx] != 0 || memory[row2_idx] != 0 {
-        println!("Possible anomaly detected: Data not as expected");
+    let mut anomaly_found = false;
+    for (i, byte) in memory.iter().enumerate() {
+        if *byte != 0xFF && i != row1_idx && i != row2_idx {
+            println!(
+                "Possible RowHammer anomaly at index {}: value = {}",
+                i, byte
+            );
+            anomaly_found = true;
+            break;
+        }
+    }
+    if anomaly_found {
+        println!("❌ Possible anomaly detected");
     } else {
-        println!("No possible anomaly detected");
+        println!("✅ No possible anomaly detected");
     }
 
     std::fs::write("/tmp/Rusty-Checker_result", format!("{}", dummy)).ok();
