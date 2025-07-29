@@ -4,6 +4,11 @@
 
 Rusty-Checker allocates a block of memory and simulates hammering adjacent rows to detect any bit flips or anomalies that may indicate a RowHammer vulnerability on your machine.
 
+> ⚠️ **WARNING:** This tool performs memory access patterns that may cause unintended side effects on vulnerable hardware.  
+> It is intended for **educational and diagnostic purposes only**.  
+> **Use at your own risk.**  
+> I am **not responsible** for any data corruption, hardware instability, or other damage caused by the use of this code.
+
 ## 🚀 Features
 
 - Memory hammering simulation in Rust.
