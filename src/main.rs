@@ -15,7 +15,7 @@ fn main() {
     let size = mb * 1024 * 1024;
     println!("Allocation {} MB of memory", mb);
 
-    let mut memory = vec![0u8; size];
+    let mut memory = vec![0xFFu8; size];
 
     let row_size = 8192;
     let row1_idx = size / 3;
