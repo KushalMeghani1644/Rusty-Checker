@@ -33,3 +33,6 @@ cd Rusty-Checker
 cargo run --release
 cd targets/release
 ./Rusty-Checker <RAM in MB> <HAMMER COUNT>
+```
+
+# BUILT WITH ❤️ IN RUST
