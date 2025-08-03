@@ -1,6 +1,13 @@
 [package]
-name = "Rusty-Checker"
+name = "rusty_checker"
 version = "0.1.0"
 edition = "2024"
-
+description = "A simple RowHammer vulnerability checker written in Rust"
+license = "GPL-3.0"
+repository = "https://github.com/KushalMeghani1644/Rusty-Checker"
+homepage = "https://kushalmeghani1644.github.io/Rusty-Suite/"            # optional but helpful
+keywords = ["rowhammer", "memory", "rust", "checker"]
+categories = ["command-line-utilities", "development-tools::debugging"]
+readme = "README.md"
+authors = ["Kushal Meghani <kushalmeghani708@gmail.com>"]
 [dependencies]
