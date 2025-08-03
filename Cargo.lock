@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "Rusty-Checker"
+name = "rusty_checker"
 version = "0.1.0"
