@@ -1,29 +1,24 @@
 # Rusty-Checker
 
-⚡ A simple Rust-based RowHammer vulnerability checker
+⚡ A simple Rust-based **RowHammer vulnerability checker**
 
-Rusty-Checker allocates a block of memory and simulates hammering adjacent rows to detect any bit flips or anomalies that may indicate a RowHammer vulnerability on your machine.
+Rusty-Checker allocates a block of memory and simulates hammering adjacent rows to detect any bit flips or anomalies that may indicate a RowHammer vulnerability on your system.
 
-> ⚠️ **WARNING:** This tool performs memory access patterns that may cause unintended side effects on vulnerable hardware.
-> It is intended for **educational and diagnostic purposes only**.
-> **Use at your own risk.**
-> I am **not responsible** for any data corruption, hardware instability, or other damage caused by the use of this code.
+> ⚠️ **WARNING**  
+> This tool performs memory access patterns that may cause unintended side effects on vulnerable hardware.  
+> It is intended for educational and diagnostic purposes **only**.  
+> **Use at your own risk**. The author is **not responsible** for any data corruption, hardware instability, or other damage caused by the use of this code.
 
-## Features
-- Allocates and hammers memory to detect unusual latency or potential vulnerability indicators.
-- Extremely lightweight and safe (does not attempt to exploit or flip actual DRAM bits).
-- Fast hammering simulation with timing.
-
-> ⚠️ **WARNING:** This tool performs memory access patterns that may cause unintended side effects on vulnerable hardware.
-> It is intended for **educational and diagnostic purposes only**.
-> **Use at your own risk.**
-> I am **not responsible** for any data corruption, hardware instability, or other damage caused by the use of this code.
+---
 
 ## 🚀 Features
 
-- Memory hammering simulation in Rust.
-- Detects possible RowHammer-style anomalies.
-- CLI support for configurable memory size (in MB).
+- Memory hammering simulation in pure Rust.
+- Detects possible RowHammer-style anomalies via timing and access patterns.
+- Lightweight and safe (does **not** attempt to exploit or flip actual DRAM bits).
+- Configurable via CLI: memory size (in MB), hammer count, and more.
+
+---
 
 ## 🛠 Usage
 
@@ -36,3 +31,4 @@ cd targets/release
 ```
 
 # BUILT WITH ❤️ IN RUST
+
