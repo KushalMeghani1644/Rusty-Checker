@@ -11,3 +11,4 @@ categories = ["command-line-utilities", "development-tools::debugging"]
 readme = "README.md"
 authors = ["Kushal Meghani <kushalmeghani708@gmail.com>"]
 [dependencies]
+dirs = "4.0.0"
