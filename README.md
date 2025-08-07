@@ -29,5 +29,10 @@ Rusty-Checker allocates a block of memory and simulates hammering adjacent rows 
 
 ```bash
 git clone git@github.com:KushalMeghani1644/Rusty-Checker.git
-cd rusty-checker
-rusty_checker <memory_allocation> <hammer_count>
+cd Rusty-Checker
+cargo run --release
+cd target/release
+./Rusty-Checker <Memory in MB> <HAMMER COUNT>
+```
+
+# BUILT WITH ❤️ IN RUST
