@@ -9,6 +9,11 @@ Rusty-Checker allocates a block of memory and simulates hammering adjacent rows 
 > It is intended for educational and diagnostic purposes **only**.  
 > **Use at your own risk**. The author is **not responsible** for any data corruption, hardware instability, or other damage caused by the use of this code.
 
+## Trademark Notice
+The names “Rusty-Suite”, “RustyTodos”, “RustyBoot”, and “Rusty-Checker” are part of this project’s identity.  
+See [TRADEMARK.md](TRADEMARK.md) for details.
+
+
 ---
 
 ## 🚀 Features
