@@ -68,7 +68,7 @@ fn hammer_memory<W: Write + ?Sized>(
             let _ = memory[i + 1].wrapping_add(1); // Row after
         }
 
-        // Check if hammered row has flipped
+        // Check if the hammered row has flipped
         if memory[i] != 0xAAAAAAAAAAAAAAAA {
             anomaly_count += 1;
             log_message(
