@@ -1,38 +1,29 @@
-# Rusty-Checker
+# Rusty-Checker 🧪
 
-⚡ A simple Rust-based RowHammer vulnerability checker
+Built with ❤️ in Rust
 
-Rusty-Checker allocates a block of memory and simulates hammering adjacent rows to detect any bit flips or anomalies that may indicate a RowHammer vulnerability on your machine.
+Rusty-Checker is a **comprehensive memory testing tool** written in Rust that helps detect memory bit flips, test memory stability, and analyze system memory reliability across different access patterns and workloads.
 
-> ⚠️ **WARNING:** This tool performs memory access patterns that may cause unintended side effects on vulnerable hardware.
-> It is intended for **educational and diagnostic purposes only**.
-> **Use at your own risk.**
-> I am **not responsible** for any data corruption, hardware instability, or other damage caused by the use of this code.
+## ✨ Features
 
-## Features
-- Allocates and hammers memory to detect unusual latency or potential vulnerability indicators.
-- Extremely lightweight and safe (does not attempt to exploit or flip actual DRAM bits).
-- Fast hammering simulation with timing.
+- 🔨 **Row Hammer Test** – stress adjacent memory rows for vulnerability detection
+- 📊 **Sequential, Random, and Checkerboard Patterns**
+- 🧩 **Configurable Memory Allocation & Stress Testing**
+- 🔢 **Multiple Test Patterns**:
+  - `0xAAAA`
+  - `0x5555`
+  - `0xFFFF`
+  - `0x0000`
+- 📝 **Detailed Logging** with timestamps and progress reporting
+- 🚀 **Performance Metrics** including memory bandwidth calculation
+- ⚙️ **Customizable Parameters**: step sizes, verbose output options, log file paths
+- 🔍 **Anomaly Detection** with error location tracking
+- 🛡️ **Graceful Error Handling** and memory allocation safety
 
-> ⚠️ **WARNING:** This tool performs memory access patterns that may cause unintended side effects on vulnerable hardware.
-> It is intended for **educational and diagnostic purposes only**.
-> **Use at your own risk.**
-> I am **not responsible** for any data corruption, hardware instability, or other damage caused by the use of this code.
+## 📦 Installation
 
-## 🚀 Features
-
-- Memory hammering simulation in Rust.
-- Detects possible RowHammer-style anomalies.
-- CLI support for configurable memory size (in MB).
-
-## 🛠 Usage
+Clone the repo and build with Cargo:
 
 ```bash
-git clone git@github.com:KushalMeghani1644/Rusty-Checker.git
-cd Rusty-Checker
-cargo run --release
-cd target/release
-./Rusty-Checker <Memory in MB> <HAMMER COUNT>
-```
-
-# BUILT WITH ❤️ IN RUST
+cargo install rusty_checker
+./rusty_checker -- <memory> <hammer_count>
