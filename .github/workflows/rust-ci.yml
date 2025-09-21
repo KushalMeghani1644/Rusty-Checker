@@ -2,9 +2,9 @@ name: Rust CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ tweaks ]
   pull_request:
-    branches: [ main ]
+    branches: [ tweaks ]
 
 jobs:
   build-test-lint:
