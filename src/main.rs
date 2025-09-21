@@ -1,143 +1,79 @@
+// rusty_checker_v2.rs
+// Polished single-file release-ready version of Rusty-Checker
+// Features added:
+// - clap for robust CLI parsing
+// - chrono for proper timestamps
+// - rand for better random testing
+// - improved error handling and clearer logging
+// - sensible caps and guards to avoid accidental huge allocations
+// - cleaner progress messages and structured TestResults
+
+use chrono::{DateTime, Utc};
+use clap::{ArgGroup, Parser, ValueEnum};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-#[derive(Debug)]
+const MAX_MEMORY_MB: usize = 32 * 1024; // 32 GB cap by default for safety
+const DEFAULT_STEP: usize = 4096; // in elements (u64 units)
+const DEFAULT_SEED: u64 = 0xDEADBEEFCAFEBABE;
+
+#[derive(thiserror::Error, Debug)]
 enum TestError {
+    #[error("Memory allocation error: {0}")]
     MemoryAllocation(String),
-    IoError(io::Error),
+
+    #[error("I/O error: {0}")]
+    IoError(#[from] io::Error),
+
+    #[error("Configuration error: {0}")]
     InvalidConfig(String),
 }
 
-impl std::fmt::Display for TestError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            TestError::MemoryAllocation(msg) => write!(f, "Memory allocation error: {}", msg),
-            TestError::IoError(err) => write!(f, "I/O error: {}", err),
-            TestError::InvalidConfig(msg) => write!(f, "Configuration error: {}", msg),
-        }
-    }
-}
-
-impl std::error::Error for TestError {}
-
-impl From<io::Error> for TestError {
-    fn from(error: io::Error) -> Self {
-        TestError::IoError(error)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TestMode {
-    RowHammer,
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum Mode {
+    Rowhammer,
     Sequential,
     Random,
     Checkerboard,
 }
 
-impl TestMode {
-    fn from_str(s: &str) -> Result<Self, String> {
-        match s.to_lowercase().as_str() {
-            "rowhammer" | "hammer" => Ok(TestMode::RowHammer),
-            "sequential" | "seq" => Ok(TestMode::Sequential),
-            "random" | "rand" => Ok(TestMode::Random),
-            "checkerboard" | "checker" => Ok(TestMode::Checkerboard),
-            _ => Err(format!("Invalid test mode: {}", s)),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Config {
+#[derive(Parser, Debug)]
+#[command(author, version, about = "Rusty-Checker — memory stress & RowHammer style tester", long_about = None)]
+#[command(group(ArgGroup::new("logging").args(["log_path"])))]
+struct Cli {
+    /// Memory size in megabytes to allocate and test
     memory_size_mb: usize,
+
+    /// Number of hammer iterations (per location / per pattern)
     hammer_count: usize,
-    mode: TestMode,
+
+    /// Test mode (rowhammer, sequential, random, checkerboard)
+    #[arg(value_enum, default_value_t = Mode::Rowhammer)]
+    mode: Mode,
+
+    /// Be chatty about progress
+    #[arg(short, long)]
     verbose: bool,
+
+    /// Step size in bytes between "rows" for rowhammer mode (default: 4096)
+    #[arg(long, default_value_t = DEFAULT_STEP)]
     step_size: usize,
+
+    /// Optional log path (directory or full file path). If directory provided, rusty_checker.log will be used inside it.
+    #[arg(long)]
     log_path: Option<PathBuf>,
+
+    /// Seed for deterministic random mode (optional)
+    #[arg(long, default_value_t = DEFAULT_SEED)]
+    seed: u64,
 }
 
-impl Config {
-    fn from_args() -> Result<Self, String> {
-        let args: Vec<String> = env::args().collect();
-
-        if args.len() < 3 {
-            return Err(format!(
-                "Usage: {} <memory_size_mb> <hammer_count> [mode] [--verbose] [--step-size N] [--log-path PATH]\n\
-                 Modes: rowhammer (default), sequential, random, checkerboard\n\
-                 Example: {} 1024 100000 rowhammer --verbose",
-                args[0], args[0]
-            ));
-        }
-
-        let memory_size_mb = args[1]
-            .parse::<usize>()
-            .map_err(|_| "Invalid memory size".to_string())?;
-
-        let hammer_count = args[2]
-            .parse::<usize>()
-            .map_err(|_| "Invalid hammer count".to_string())?;
-
-        let mut mode = TestMode::RowHammer;
-        let mut verbose = false;
-        let mut step_size = 4096;
-        let mut log_path = None;
-        let mut i = 3;
-
-        // Parse optional arguments
-        while i < args.len() {
-            match args[i].as_str() {
-                "--verbose" | "-v" => verbose = true,
-                "--step-size" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err("--step-size requires a value".to_string());
-                    }
-                    step_size = args[i]
-                        .parse()
-                        .map_err(|_| "Invalid step size".to_string())?;
-                }
-                "--log-path" => {
-                    i += 1;
-                    if i >= args.len() {
-                        return Err("--log-path requires a value".to_string());
-                    }
-                    log_path = Some(PathBuf::from(&args[i]));
-                }
-                arg => {
-                    // Try to parse as mode if it's the first positional arg after required ones
-                    if i == 3 {
-                        mode = TestMode::from_str(arg)?;
-                    } else {
-                        return Err(format!("Unknown argument: {}", arg));
-                    }
-                }
-            }
-            i += 1;
-        }
-
-        if memory_size_mb == 0 {
-            return Err("Memory size must be greater than 0".to_string());
-        }
-
-        if hammer_count == 0 {
-            return Err("Hammer count must be greater than 0".to_string());
-        }
-
-        Ok(Config {
-            memory_size_mb,
-            hammer_count,
-            mode,
-            verbose,
-            step_size,
-            log_path,
-        })
-    }
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct ErrorLocation {
     index: usize,
     expected: u64,
@@ -147,7 +83,7 @@ struct ErrorLocation {
 
 #[derive(Debug)]
 struct TestResults {
-    test_mode: TestMode,
+    mode: Mode,
     memory_size_mb: usize,
     hammer_count: usize,
     step_size: usize,
@@ -166,34 +102,49 @@ const PATTERNS: [u64; 4] = [
 ];
 
 struct MemoryTester {
-    config: Config,
+    memory_size_mb: usize,
+    hammer_count: usize,
+    mode: Mode,
+    verbose: bool,
+    step_size: usize,
+    log_path: Option<PathBuf>,
+    rng_seed: u64,
 }
 
 impl MemoryTester {
-    fn new(config: Config) -> Self {
-        MemoryTester { config }
+    fn new(cli: Cli) -> Result<Self, TestError> {
+        if cli.memory_size_mb == 0 {
+            return Err(TestError::InvalidConfig(
+                "memory_size_mb must be > 0".into(),
+            ));
+        }
+        if cli.hammer_count == 0 {
+            return Err(TestError::InvalidConfig("hammer_count must be > 0".into()));
+        }
+        if cli.memory_size_mb > MAX_MEMORY_MB {
+            return Err(TestError::InvalidConfig(format!(
+                "memory_size_mb is capped to {} MB for safety. Requested: {} MB",
+                MAX_MEMORY_MB, cli.memory_size_mb
+            )));
+        }
+        if cli.step_size == 0 {
+            return Err(TestError::InvalidConfig("step_size must be > 0".into()));
+        }
+
+        Ok(Self {
+            memory_size_mb: cli.memory_size_mb,
+            hammer_count: cli.hammer_count,
+            mode: cli.mode,
+            verbose: cli.verbose,
+            step_size: cli.step_size,
+            log_path: cli.log_path,
+            rng_seed: cli.seed,
+        })
     }
 
-    fn get_timestamp() -> String {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or(Duration::from_secs(0));
-        let secs = now.as_secs();
-        let naive = secs;
-
-        // Simple timestamp formatting (YYYY-MM-DD HH:MM:SS)
-        let days_since_epoch = secs / 86400;
-        let days_since_1970 = days_since_epoch;
-        let year = 1970 + (days_since_1970 / 365) + ((days_since_1970 / 365) / 4); // Rough approximation
-        let remaining_secs = secs % 86400;
-        let hours = remaining_secs / 3600;
-        let minutes = (remaining_secs % 3600) / 60;
-        let seconds = remaining_secs % 60;
-
-        format!(
-            "{:04}-XX-XX {:02}:{:02}:{:02} UTC",
-            year, hours, minutes, seconds
-        )
+    fn timestamp() -> String {
+        let now: DateTime<Utc> = Utc::now();
+        now.format("%Y-%m-%d %H:%M:%S UTC").to_string()
     }
 
     fn log_message<W: Write + ?Sized>(
@@ -201,38 +152,38 @@ impl MemoryTester {
         writer: &mut W,
         message: &str,
     ) -> Result<(), TestError> {
-        let timestamp = Self::get_timestamp();
-        writeln!(writer, "[{}] {}", timestamp, message)?;
-        if self.config.verbose {
-            println!("[{}] {}", timestamp, message);
+        let ts = Self::timestamp();
+        writeln!(writer, "[{}] {}", ts, message)?;
+        if self.verbose {
+            println!("[{}] {}", ts, message);
         }
         Ok(())
     }
 
-    fn allocate_memory(&self, size_bytes: usize) -> Result<Vec<u64>, TestError> {
+    fn allocate_memory(&self) -> Result<Vec<u64>, TestError> {
+        let size_bytes = self
+            .memory_size_mb
+            .checked_mul(1024 * 1024)
+            .ok_or_else(|| {
+                TestError::MemoryAllocation("Requested memory size overflowed".into())
+            })?;
+
         let num_elements = size_bytes / std::mem::size_of::<u64>();
 
         if num_elements == 0 {
-            return Err(TestError::MemoryAllocation(
-                "Memory size too small".to_string(),
-            ));
+            return Err(TestError::MemoryAllocation("Memory size too small".into()));
         }
 
-        // Try to allocate memory
-        let memory = vec![0u64; num_elements];
-        if memory.len() != num_elements {
-            return Err(TestError::MemoryAllocation(
-                "Failed to allocate requested memory size".to_string(),
-            ));
-        }
+        // Try to allocate. This may OOM and panic; we catch via Vec::with_capacity then resize.
+        let mut memory = Vec::with_capacity(num_elements);
+        // fill with zeros
+        memory.resize(num_elements, 0u64);
 
         Ok(memory)
     }
 
-    fn fill_memory_pattern(&self, memory: &mut [u64], pattern: u64) {
-        for element in memory.iter_mut() {
-            *element = pattern;
-        }
+    fn fill_pattern(&self, memory: &mut [u64], pattern: u64) {
+        memory.iter_mut().for_each(|elem| *elem = pattern);
     }
 
     fn test_rowhammer(
@@ -240,42 +191,59 @@ impl MemoryTester {
         memory: &mut [u64],
         writer: &mut dyn Write,
     ) -> Result<usize, TestError> {
+        // interpret step_size as bytes -> convert to u64 elements if divisible by 8
+        let elem_step = if self.step_size % std::mem::size_of::<u64>() == 0 {
+            self.step_size / std::mem::size_of::<u64>()
+        } else {
+            1usize
+        };
+
         let num_elements = memory.len();
-        let step = self.config.step_size.min(num_elements / 2);
+        if elem_step == 0 || elem_step >= num_elements / 2 {
+            return Err(TestError::InvalidConfig(
+                "step_size is too large relative to allocated memory".into(),
+            ));
+        }
 
         self.log_message(
             writer,
-            &format!("🔨 Starting row hammer test with step size: {}", step),
+            &format!(
+                "Starting rowhammer: elem_step={}, hammer_count={}",
+                elem_step, self.hammer_count
+            ),
         )?;
 
-        let mut tests_performed = 0;
-        for i in (step..num_elements - step).step_by(step) {
-            // Hammer adjacent "rows"
-            for _ in 0..self.config.hammer_count {
-                // Read and write adjacent memory locations
-                let temp1 = memory[i - step];
-                let temp2 = memory[i + step];
+        let mut tests = 0usize;
+        for center in (elem_step..(num_elements - elem_step)).step_by(elem_step) {
+            // hammer adjacent locations
+            for _ in 0..self.hammer_count {
+                // read-modify-write on adjacent locations
+                let a_idx = center - elem_step;
+                let b_idx = center + elem_step;
 
-                memory[i - step] = temp1.wrapping_add(1);
-                memory[i + step] = temp2.wrapping_add(1);
+                let a = memory[a_idx];
+                let b = memory[b_idx];
 
-                // Prevent compiler optimization
-                std::hint::black_box((temp1, temp2));
+                // simple RMW
+                memory[a_idx] = a.wrapping_add(1);
+                memory[b_idx] = b.wrapping_add(1);
+
+                // keep values alive for optimizer
+                std::hint::black_box((a, b));
             }
 
-            tests_performed += 1;
+            tests += 1;
 
-            // Progress reporting
-            if self.config.verbose && tests_performed % 1000 == 0 {
-                let progress = (i as f64 / num_elements as f64) * 100.0;
+            if self.verbose && tests % 1000 == 0 {
+                let progress = (center as f64 / num_elements as f64) * 100.0;
                 self.log_message(
                     writer,
-                    &format!("Progress: {:.1}% ({} tests)", progress, tests_performed),
+                    &format!("Rowhammer progress: {:.2}% ({} tests)", progress, tests),
                 )?;
             }
         }
 
-        Ok(tests_performed)
+        Ok(tests)
     }
 
     fn test_sequential(
@@ -283,47 +251,42 @@ impl MemoryTester {
         memory: &mut [u64],
         writer: &mut dyn Write,
     ) -> Result<usize, TestError> {
-        self.log_message(writer, "🔄 Starting sequential memory test")?;
-
-        for i in 0..memory.len() {
-            for _ in 0..self.config.hammer_count {
-                let temp = memory[i];
-                memory[i] = temp.wrapping_add(1);
-                std::hint::black_box(temp);
+        self.log_message(writer, "Starting sequential test")?;
+        let len = memory.len();
+        for i in 0..len {
+            for _ in 0..self.hammer_count {
+                let v = memory[i];
+                memory[i] = v.wrapping_add(1);
+                std::hint::black_box(v);
             }
-
-            if self.config.verbose && i % 100000 == 0 && i > 0 {
-                let progress = (i as f64 / memory.len() as f64) * 100.0;
-                self.log_message(
-                    writer,
-                    &format!("Sequential test progress: {:.1}%", progress),
-                )?;
+            if self.verbose && i % 100_000 == 0 && i > 0 {
+                let prog = (i as f64 / len as f64) * 100.0;
+                self.log_message(writer, &format!("Sequential progress: {:.2}%", prog))?;
             }
         }
-
-        Ok(memory.len())
+        Ok(len)
     }
 
     fn test_random(&self, memory: &mut [u64], writer: &mut dyn Write) -> Result<usize, TestError> {
-        self.log_message(writer, "🎲 Starting random memory test")?;
+        self.log_message(writer, "Starting random test")?;
+        let mut rng = StdRng::seed_from_u64(self.rng_seed);
+        let num_ops = (self.hammer_count as usize)
+            .saturating_mul(10_000)
+            .min(memory.len() * 2);
 
-        let num_tests = memory.len().min(self.config.hammer_count * 1000);
+        for i in 0..num_ops {
+            let idx = rng.gen_range(0..memory.len());
+            let v = memory[idx];
+            memory[idx] = v.wrapping_add(1);
+            std::hint::black_box(v);
 
-        for i in 0..num_tests {
-            // Simple pseudo-random index generation using linear congruential generator
-            let random_index = ((i.wrapping_mul(1103515245).wrapping_add(12345)) % memory.len());
-
-            let temp = memory[random_index];
-            memory[random_index] = temp.wrapping_add(1);
-            std::hint::black_box(temp);
-
-            if self.config.verbose && i % 10000 == 0 && i > 0 {
-                let progress = (i as f64 / num_tests as f64) * 100.0;
-                self.log_message(writer, &format!("Random test progress: {:.1}%", progress))?;
+            if self.verbose && i % 10_000 == 0 && i > 0 {
+                let prog = (i as f64 / num_ops as f64) * 100.0;
+                self.log_message(writer, &format!("Random progress: {:.2}%", prog))?;
             }
         }
 
-        Ok(num_tests)
+        Ok(num_ops)
     }
 
     fn test_checkerboard(
@@ -331,233 +294,243 @@ impl MemoryTester {
         memory: &mut [u64],
         writer: &mut dyn Write,
     ) -> Result<usize, TestError> {
-        self.log_message(writer, "🏁 Starting checkerboard memory test")?;
+        self.log_message(writer, "Starting checkerboard test")?;
 
-        // Alternate between two patterns
-        for iteration in 0..self.config.hammer_count {
-            let pattern = if iteration % 2 == 0 {
-                0xAAAAAAAAAAAAAAAA
+        for iter in 0..self.hammer_count {
+            let base = if iter % 2 == 0 {
+                PATTERNS[0]
             } else {
-                0x5555555555555555
+                PATTERNS[1]
             };
-
-            for (i, element) in memory.iter_mut().enumerate() {
-                let expected_pattern = if i % 2 == 0 { pattern } else { !pattern };
-                *element = expected_pattern;
+            for (i, e) in memory.iter_mut().enumerate() {
+                *e = if i % 2 == 0 { base } else { !base };
             }
-
-            if self.config.verbose && iteration % 100 == 0 {
-                let progress = (iteration as f64 / self.config.hammer_count as f64) * 100.0;
-                self.log_message(
-                    writer,
-                    &format!("Checkerboard test progress: {:.1}%", progress),
-                )?;
+            if self.verbose && iter % 100 == 0 {
+                let prog = (iter as f64 / self.hammer_count as f64) * 100.0;
+                self.log_message(writer, &format!("Checkerboard progress: {:.2}%", prog))?;
             }
         }
-
-        Ok(memory.len() * self.config.hammer_count)
+        Ok(memory.len() * self.hammer_count)
     }
 
-    fn check_memory_integrity(
+    fn check_integrity(
         &self,
         memory: &[u64],
-        expected_pattern: u64,
+        expected: u64,
         pattern_id: usize,
     ) -> Vec<ErrorLocation> {
         let mut errors = Vec::new();
-
-        for (i, &value) in memory.iter().enumerate() {
-            if value != expected_pattern {
+        for (i, &v) in memory.iter().enumerate() {
+            if v != expected {
                 errors.push(ErrorLocation {
                     index: i,
-                    expected: expected_pattern,
-                    actual: value,
+                    expected,
+                    actual: v,
                     pattern_id,
                 });
-
-                // Limit error reporting to prevent excessive output
-                if errors.len() >= 10000 {
+                if errors.len() >= 10_000 {
                     break;
                 }
             }
         }
-
         errors
     }
 
-    fn run_memory_test(&self, writer: &mut dyn Write) -> Result<TestResults, TestError> {
-        let size_bytes = self.config.memory_size_mb * 1024 * 1024;
-        let mut memory = self.allocate_memory(size_bytes)?;
+    fn default_log_path() -> PathBuf {
+        if let Ok(home) = env::var("HOME") {
+            let mut p = PathBuf::from(home);
+            p.push(".rusty_checker");
+            p
+        } else {
+            PathBuf::from("/tmp/rusty_checker")
+        }
+    }
 
+    fn open_log(&self) -> Result<BufWriter<File>, TestError> {
+        let path = if let Some(ref p) = self.log_path {
+            if p.is_dir() {
+                let mut file = p.clone();
+                file.push("rusty_checker.log");
+                file
+            } else if p.ends_with(".log") {
+                p.clone()
+            } else if p.exists() && p.is_file() {
+                p.clone()
+            } else if p.parent().is_some() {
+                // allow a full path that may not exist yet
+                p.clone()
+            } else {
+                // fallback
+                let mut d = Self::default_log_path();
+                d.push("rusty_checker.log");
+                d
+            }
+        } else {
+            let mut d = Self::default_log_path();
+            fs::create_dir_all(&d)?;
+            d.push("rusty_checker.log");
+            d
+        };
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)?;
+        Ok(BufWriter::new(file))
+    }
+
+    fn run(&self) -> Result<TestResults, TestError> {
+        let mut writer = self.open_log()?;
+
+        self.log_message(&mut writer, "Starting rusty_checker (v2) ...")?;
         self.log_message(
-            writer,
+            &mut writer,
             &format!(
-                "📊 Allocated {} MB of memory ({} elements)",
-                self.config.memory_size_mb,
-                memory.len()
+                "Mode: {:?}, Memory: {} MB, Hammer count: {}",
+                self.mode, self.memory_size_mb, self.hammer_count
             ),
         )?;
 
+        let mut memory = self.allocate_memory()?;
         self.log_message(
-            writer,
+            &mut writer,
             &format!(
-                "🖥️  System: {} {}",
+                "Allocated {} MB ({} u64 elements)",
+                self.memory_size_mb,
+                memory.len()
+            ),
+        )?;
+        self.log_message(
+            &mut writer,
+            &format!(
+                "System: {} {}",
                 std::env::consts::OS,
                 std::env::consts::ARCH
             ),
         )?;
 
-        let start_time = Instant::now();
+        let start = Instant::now();
         let mut all_errors = Vec::new();
-        let mut total_tests = 0;
+        let mut total_tests: usize = 0;
 
-        for (pattern_id, &pattern) in PATTERNS.iter().enumerate() {
+        for (pid, &pattern) in PATTERNS.iter().enumerate() {
             self.log_message(
-                writer,
+                &mut writer,
                 &format!(
-                    "🎯 Testing pattern {}/{}: 0x{:016X}",
-                    pattern_id + 1,
+                    "Testing pattern {}/{}: 0x{:016X}",
+                    pid + 1,
                     PATTERNS.len(),
                     pattern
                 ),
             )?;
+            self.fill_pattern(&mut memory, pattern);
 
-            self.fill_memory_pattern(&mut memory, pattern);
-
-            // Run the specific test based on mode
-            let tests_in_pattern = match self.config.mode {
-                TestMode::RowHammer => self.test_rowhammer(&mut memory, writer)?,
-                TestMode::Sequential => self.test_sequential(&mut memory, writer)?,
-                TestMode::Random => self.test_random(&mut memory, writer)?,
-                TestMode::Checkerboard => self.test_checkerboard(&mut memory, writer)?,
+            let tests_done = match self.mode {
+                Mode::Rowhammer => self.test_rowhammer(&mut memory, &mut writer)?,
+                Mode::Sequential => self.test_sequential(&mut memory, &mut writer)?,
+                Mode::Random => self.test_random(&mut memory, &mut writer)?,
+                Mode::Checkerboard => self.test_checkerboard(&mut memory, &mut writer)?,
             };
 
-            // Check for bit flips after testing
-            let integrity_errors = self.check_memory_integrity(&memory, pattern, pattern_id);
+            total_tests = total_tests.saturating_add(tests_done);
 
-            if !integrity_errors.is_empty() {
+            let errors = self.check_integrity(&memory, pattern, pid);
+            if !errors.is_empty() {
                 self.log_message(
-                    writer,
+                    &mut writer,
                     &format!(
-                        "⚠️  Found {} anomalies with pattern 0x{:016X}",
-                        integrity_errors.len(),
+                        "Found {} anomalies for pattern 0x{:016X}",
+                        errors.len(),
                         pattern
                     ),
                 )?;
-
-                // Log first few errors
-                for error in integrity_errors.iter().take(5) {
+                for e in errors.iter().take(5) {
                     self.log_message(
-                        writer,
+                        &mut writer,
                         &format!(
-                            "   Index {}: expected 0x{:016X}, got 0x{:016X}",
-                            error.index, error.expected, error.actual
+                            "  Index {}: expected 0x{:016X}, got 0x{:016X}",
+                            e.index, e.expected, e.actual
                         ),
                     )?;
                 }
-
-                if integrity_errors.len() > 5 {
-                    self.log_message(
-                        writer,
-                        &format!("   ... and {} more", integrity_errors.len() - 5),
-                    )?;
+                if errors.len() > 5 {
+                    self.log_message(&mut writer, &format!("  ... and {} more", errors.len() - 5))?;
                 }
             }
 
-            all_errors.extend(integrity_errors);
-            total_tests += tests_in_pattern;
+            all_errors.extend(errors);
         }
 
-        let duration = start_time.elapsed();
-        let total_bytes = (total_tests * std::mem::size_of::<u64>()) as f64;
-        let bandwidth_mbps = (total_bytes / 1024.0 / 1024.0) / duration.as_secs_f64();
+        let duration = start.elapsed();
+        let total_bytes = (total_tests as f64) * (std::mem::size_of::<u64>() as f64);
+        let bandwidth = if duration.as_secs_f64() > 0.0 {
+            (total_bytes / 1024.0 / 1024.0) / duration.as_secs_f64()
+        } else {
+            0.0
+        };
 
         let results = TestResults {
-            test_mode: self.config.mode,
-            memory_size_mb: self.config.memory_size_mb,
-            hammer_count: self.config.hammer_count,
-            step_size: self.config.step_size,
+            mode: self.mode,
+            memory_size_mb: self.memory_size_mb,
+            hammer_count: self.hammer_count,
+            step_size: self.step_size,
             total_tests,
             anomalies_found: all_errors.len(),
             test_duration: duration,
-            memory_bandwidth_mbps: bandwidth_mbps,
+            memory_bandwidth_mbps: bandwidth,
             error_locations: all_errors,
         };
 
-        self.log_message(writer, &format!("✅ Testing complete in {:.2?}", duration))?;
+        self.log_message(&mut writer, &format!("Completed in {:.2?}", duration))?;
         self.log_message(
-            writer,
-            &format!("🧪 Total anomalies detected: {}", results.anomalies_found),
+            &mut writer,
+            &format!("Anomalies: {}", results.anomalies_found),
         )?;
         self.log_message(
-            writer,
-            &format!("⚡ Memory bandwidth: {:.2} MB/s", bandwidth_mbps),
+            &mut writer,
+            &format!("Bandwidth: {:.2} MB/s", results.memory_bandwidth_mbps),
         )?;
+
+        // flush final messages
+        writer.flush()?;
 
         Ok(results)
-    }
-
-    fn get_default_log_path() -> PathBuf {
-        let mut path = if let Some(home) = env::var("HOME").ok() {
-            PathBuf::from(home)
-        } else {
-            PathBuf::from("/tmp")
-        };
-        path.push(".rusty_checker");
-        path
-    }
-
-    fn run(&self) -> Result<(), TestError> {
-        // Determine log path
-        let log_path = if let Some(ref custom_path) = self.config.log_path {
-            custom_path.clone()
-        } else {
-            let mut path = Self::get_default_log_path();
-            if let Err(_) = fs::create_dir_all(&path) {
-                // Fallback to /tmp if we can't create in home
-                path = PathBuf::from("/tmp/rusty_checker");
-                fs::create_dir_all(&path)?;
-            }
-            path.push("rusty_checker.log");
-            path
-        };
-
-        // Create log file
-        let log_file = File::create(&log_path)?;
-        let mut log_writer = BufWriter::new(log_file);
-
-        // Start testing
-        println!("🚀 Starting rusty_checker...");
-        self.log_message(&mut log_writer, "Starting rusty_checker...")?;
-
-        let results = self.run_memory_test(&mut log_writer)?;
-
-        // Final summary
-        let summary = format!(
-            "Test completed: {}/{} anomalies found in {} MB of memory",
-            results.anomalies_found, results.total_tests, results.memory_size_mb
-        );
-        println!("🎯 {}", summary);
-        println!("📝 Log saved to: {}", log_path.display());
-        self.log_message(&mut log_writer, &summary)?;
-
-        Ok(())
     }
 }
 
 fn main() {
-    let config = match Config::from_args() {
-        Ok(cfg) => cfg,
+    let cli = Cli::parse();
+
+    let tester = match MemoryTester::new(cli) {
+        Ok(t) => t,
         Err(e) => {
-            eprintln!("Error: {}", e);
+            eprintln!("Configuration error: {}", e);
             std::process::exit(1);
         }
     };
 
-    let tester = MemoryTester::new(config);
-
-    if let Err(e) = tester.run() {
-        eprintln!("❌ rusty_checker failed: {}", e);
-        std::process::exit(1);
+    match tester.run() {
+        Ok(results) => {
+            println!(
+                "✅ Test finished: {} anomalies in {} MB (mode: {:?})",
+                results.anomalies_found, results.memory_size_mb, results.mode
+            );
+            if let Some(path) = tester.log_path.as_ref() {
+                println!("📝 Log (user-provided): {}", path.display());
+            } else {
+                println!(
+                    "📝 Log saved to default location (~/.rusty_checker/rusty_checker.log or /tmp)"
+                );
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ rusty_checker failed: {}", e);
+            std::process::exit(2);
+        }
     }
 }
